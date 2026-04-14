@@ -1,0 +1,560 @@
+openapi: 3.0.3
+
+info:
+  title: Videogame Collection Service
+  version: "1.0"
+  description: |
+    HTTP API for managing personal videogame collections.
+
+    Two user roles exist:
+    - **Customer** – tracks their own game collection. Authenticates via `Authorization: ApiKey <key>`.
+    - **Admin** – maintains the platform catalogue, game catalogue, and customer registry. Authenticates via HTTP Basic Auth.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+# ---------------------------------------------------------------------------
+# Security schemes
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+
+    CustomerApiKey:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Customer API key. The header value must be in the format `ApiKey <key>`,
+        e.g. `Authorization: ApiKey abc123`.
+        The key is issued by the admin when a customer account is created.
+
+    AdminBasicAuth:
+      type: http
+      scheme: basic
+      description: Admin credentials using HTTP Basic Authentication.
+
+# ---------------------------------------------------------------------------
+# Reusable schemas
+# ---------------------------------------------------------------------------
+  schemas:
+
+    Genre:
+      type: string
+      enum:
+        - shmup
+        - racing
+        - platforms
+      description: Allowed game genres.
+
+    Game:
+      type: object
+      description: A game entry in the catalogue.
+      required:
+        - id
+        - platformId
+        - title
+        - genre
+      properties:
+        id:
+          type: string
+          maxLength: 30
+          description: Game identifier. Only unique in combination with `platformId`.
+          example: sonic
+        platformId:
+          type: string
+          maxLength: 30
+          description: The platform this game belongs to.
+          example: megadrive
+        title:
+          type: string
+          maxLength: 50
+          description: Display title of the game.
+          example: Sonic the Hedgehog
+        description:
+          type: string
+          maxLength: 200
+          description: Optional free-text description.
+          example: A fast platformer by Sega.
+        genre:
+          $ref: '#/components/schemas/Genre'
+
+    GamesListResponse:
+      type: object
+      description: Paginated list of games.
+      required:
+        - data
+        - nextCursor
+        - total
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Game'
+          description: Games on this page, sorted alphabetically by title (case-insensitive).
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque pagination cursor. Pass as `cursor` in the next request. `null` when no further pages exist.
+          example: dXNlcjoxMjM0NTY3ODkw
+        total:
+          type: integer
+          description: Total count of matching games across all pages (not just the current page).
+          example: 42
+
+    CollectionResponse:
+      type: object
+      description: The authenticated customer's game collection.
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Game'
+          description: All games in the collection, sorted alphabetically by title (case-insensitive).
+
+    CustomerRequest:
+      type: object
+      description: Request body for creating a customer.
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          maxLength: 30
+          description: Unique customer identifier. Acts as the primary key.
+          example: alice
+
+    CustomerCreatedResponse:
+      type: object
+      description: Response body returned when a customer is created.
+      required:
+        - username
+        - apiKey
+      properties:
+        username:
+          type: string
+          maxLength: 30
+          example: alice
+        apiKey:
+          type: string
+          description: Auto-generated API key. The admin must communicate this to the customer.
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+    PlatformRequest:
+      type: object
+      description: Request body for creating a platform.
+      required:
+        - id
+        - year
+      properties:
+        id:
+          type: string
+          maxLength: 30
+          description: Unique platform identifier. Acts as the primary key.
+          example: megadrive
+        year:
+          type: integer
+          description: Release year of the platform.
+          example: 1988
+        description:
+          type: string
+          maxLength: 200
+          description: Optional free-text description.
+          example: Sega's 16-bit home console.
+
+    GameRequest:
+      type: object
+      description: Request body for creating a game.
+      required:
+        - id
+        - platformId
+        - title
+        - genre
+      properties:
+        id:
+          type: string
+          maxLength: 30
+          description: Game identifier. Only unique in combination with `platformId`.
+          example: sonic
+        platformId:
+          type: string
+          maxLength: 30
+          description: Must reference an existing platform.
+          example: megadrive
+        title:
+          type: string
+          maxLength: 50
+          example: Sonic the Hedgehog
+        description:
+          type: string
+          maxLength: 200
+          description: Optional free-text description.
+          example: A fast platformer by Sega.
+        genre:
+          $ref: '#/components/schemas/Genre'
+
+    ErrorCode:
+      type: string
+      description: Machine-readable error identifier.
+      enum:
+        - INVALID_API_KEY
+        - INVALID_ADMIN_CREDENTIALS
+        - GAME_NOT_FOUND
+        - CUSTOMER_ALREADY_EXISTS
+        - PLATFORM_ALREADY_EXISTS
+        - GAME_ALREADY_EXISTS
+        - PLATFORM_NOT_FOUND
+        - INVALID_GENRE
+
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: Human-readable description of the error.
+
+    ErrorResponse:
+      type: object
+      description: Standard error envelope used by all error responses.
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+
+# ---------------------------------------------------------------------------
+# Reusable responses
+# ---------------------------------------------------------------------------
+  responses:
+
+    Unauthorized_Customer:
+      description: "The API key header is absent or the key is not recognised."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: INVALID_API_KEY
+              message: "API key header missing or key not found."
+
+    Unauthorized_Admin:
+      description: "The admin credentials are absent or incorrect."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: INVALID_ADMIN_CREDENTIALS
+              message: "Admin credentials missing or incorrect."
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # ── /games ─────────────────────────────────────────────────────────────────
+
+  /games:
+
+    get:
+      summary: List available games
+      description: |
+        Returns all games in the catalogue that match the provided filters.
+        Filters are combined with AND logic. Results are sorted alphabetically
+        by title (case-insensitive) and paginated using cursor-based pagination.
+      operationId: listGames
+      tags:
+        - Games
+      security:
+        - CustomerApiKey: []
+      parameters:
+        - name: platformId
+          in: query
+          required: false
+          description: Filter results to games belonging to this platform.
+          schema:
+            type: string
+          example: megadrive
+        - name: genre
+          in: query
+          required: false
+          description: Filter results to games of this genre.
+          schema:
+            $ref: '#/components/schemas/Genre'
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque pagination cursor returned by a previous response. Omit for the first page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of games to return in a single page.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Paginated list of matching games.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GamesListResponse'
+              example:
+                data:
+                  - id: sonic
+                    platformId: megadrive
+                    title: Sonic the Hedgehog
+                    description: A fast platformer by Sega.
+                    genre: platforms
+                nextCursor: null
+                total: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized_Customer'
+
+    post:
+      summary: Create a game
+      description: |
+        Adds a new game to the catalogue. The composite key `(id, platformId)` must
+        be globally unique. The referenced `platformId` must already exist.
+      operationId: createGame
+      tags:
+        - Games
+      security:
+        - AdminBasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GameRequest'
+            example:
+              id: sonic
+              platformId: megadrive
+              title: Sonic the Hedgehog
+              description: A fast platformer by Sega.
+              genre: platforms
+      responses:
+        '204':
+          description: Game created successfully.
+        '401':
+          $ref: '#/components/responses/Unauthorized_Admin'
+        '409':
+          description: "A game with the same `(id, platformId)` pair already exists."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: GAME_ALREADY_EXISTS
+                  message: "A game with id 'sonic' on platform 'megadrive' already exists."
+        '422':
+          description: |
+            Validation error. Possible causes:
+            - The referenced `platformId` does not exist.
+            - The `genre` value is not in the allowed set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                platform_not_found:
+                  summary: Platform not found
+                  value:
+                    error:
+                      code: PLATFORM_NOT_FOUND
+                      message: "Platform 'megadrive' does not exist."
+                invalid_genre:
+                  summary: Invalid genre
+                  value:
+                    error:
+                      code: INVALID_GENRE
+                      message: "Genre 'action' is not valid. Allowed values: shmup, racing, platforms."
+
+  # ── /collection ────────────────────────────────────────────────────────────
+
+  /collection:
+
+    get:
+      summary: Retrieve own collection
+      description: |
+        Returns all games in the authenticated customer's collection.
+        The list is sorted alphabetically by title (case-insensitive).
+        No pagination is applied.
+      operationId: getCollection
+      tags:
+        - Collection
+      security:
+        - CustomerApiKey: []
+      responses:
+        '200':
+          description: The authenticated customer's game collection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionResponse'
+              example:
+                data:
+                  - id: sonic
+                    platformId: megadrive
+                    title: Sonic the Hedgehog
+                    description: A fast platformer by Sega.
+                    genre: platforms
+        '401':
+          $ref: '#/components/responses/Unauthorized_Customer'
+
+  /collection/{gameId}/{platformId}:
+
+    post:
+      summary: Add a game to the collection
+      description: |
+        Adds the identified game to the authenticated customer's collection.
+        The operation is **idempotent**: if the game is already in the collection,
+        the request succeeds silently with no state change.
+
+        Both path parameters are required because a game is uniquely identified
+        by the composite key `(gameId, platformId)`.
+      operationId: addGameToCollection
+      tags:
+        - Collection
+      security:
+        - CustomerApiKey: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: sonic
+        - name: platformId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: megadrive
+      responses:
+        '204':
+          description: Game added to collection (or was already present — idempotent).
+        '401':
+          $ref: '#/components/responses/Unauthorized_Customer'
+        '422':
+          description: "The `(gameId, platformId)` combination does not exist."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: GAME_NOT_FOUND
+                  message: "No game found with id 'sonic' on platform 'megadrive'."
+
+  # ── /customers ─────────────────────────────────────────────────────────────
+
+  /customers:
+
+    post:
+      summary: Create a customer
+      description: |
+        Registers a new customer, auto-generates a unique API key for them,
+        and automatically creates an empty collection for the customer.
+
+        This operation is **NOT idempotent**: creating the same username twice is an error.
+      operationId: createCustomer
+      tags:
+        - Customers
+      security:
+        - AdminBasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+            example:
+              username: alice
+      responses:
+        '201':
+          description: Customer created. The response body includes the generated API key that must be communicated to the customer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerCreatedResponse'
+              example:
+                username: alice
+                apiKey: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        '401':
+          $ref: '#/components/responses/Unauthorized_Admin'
+        '409':
+          description: "A customer with that username already exists."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: CUSTOMER_ALREADY_EXISTS
+                  message: "A customer with username 'alice' already exists."
+
+  # ── /platforms ─────────────────────────────────────────────────────────────
+
+  /platforms:
+
+    post:
+      summary: Create a platform
+      description: |
+        Adds a new platform to the catalogue.
+        This operation is **NOT idempotent**: creating the same platform ID twice is an error.
+      operationId: createPlatform
+      tags:
+        - Platforms
+      security:
+        - AdminBasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformRequest'
+            example:
+              id: megadrive
+              year: 1988
+              description: Sega's 16-bit home console.
+      responses:
+        '204':
+          description: Platform created successfully.
+        '401':
+          $ref: '#/components/responses/Unauthorized_Admin'
+        '409':
+          description: "A platform with that ID already exists."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: PLATFORM_ALREADY_EXISTS
+                  message: "A platform with id 'megadrive' already exists."
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+tags:
+  - name: Games
+    description: Game catalogue operations.
+  - name: Collection
+    description: Personal collection management (customer-facing).
+  - name: Customers
+    description: Customer account management (admin-only).
+  - name: Platforms
+    description: Platform catalogue management (admin-only).

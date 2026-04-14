@@ -14,3 +14,12 @@ Could you please try to understand the requirements and rewrite them to be more 
 Please ask me any question you may have
 ```
 
+* Create an OpenAPI spec out of the requirements. Prompts using Claude Code Visual Code extension:
+
+```
+given the requirements in `REQUIREMENTS_v2.md`, could you create an OpenAPI specification for the HTTP service?
+```
+
+```
+the API spec will be public, could you remove any reference to internal implementation details (like requirement IDs or how the admin user and password is configured)?
+```
